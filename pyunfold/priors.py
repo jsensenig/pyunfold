@@ -2,6 +2,7 @@
 from __future__ import division, print_function
 import numpy as np
 import pandas as pd
+import torch
 
 
 def uniform_prior(num_causes):
@@ -25,7 +26,7 @@ def uniform_prior(num_causes):
     """
     # All bins are given equal probability.
     # Most generic normalized prior.
-    prior = np.full(num_causes, 1/num_causes)
+    prior = torch.full((num_causes,), 1 / num_causes, dtype=torch.double)
 
     return prior
 
@@ -74,11 +75,11 @@ def jeffreys_prior(causes):
     # All cause bins are given equal probability mass.
     # Best prior for x-ranges spanning decades.
     ln_factor = np.log(causes.max() / causes.min())
-    prior = 1 / (ln_factor * causes)
+    prior = 1. / (ln_factor * causes)
     # Want to make sure prior is normalized (i.e. prior.sum() == 1)
-    prior = prior / np.sum(prior)
+    prior = prior / prior.sum()
 
-    return prior
+    return torch.tensor(prior).double()
 
 
 def setup_prior(prior=None, num_causes=None):
@@ -101,16 +102,16 @@ def setup_prior(prior=None, num_causes=None):
     if prior is None:
         assert num_causes is not None, 'num_causes must be specified for uniform prior'
         prior = uniform_prior(num_causes=num_causes)
-    elif isinstance(prior, (list, tuple, np.ndarray, pd.Series)):
-        prior = np.asarray(prior)
+    elif isinstance(prior, (list, tuple, np.ndarray, torch.Tensor, pd.Series)):
+        prior = torch.tensor(prior).double()
     else:
         raise TypeError('prior must be either None or array_like, '
                         'but got {}'.format(type(prior)))
 
-    if not np.allclose(np.sum(prior), 1):
+    if not abs(prior.sum().item() - 1) < 1.e-05:
         raise ValueError('Prior (which is an array of probabilities) does '
-                         'not add to 1. sum(prior) = {}'.format(np.sum(prior)))
-    if np.amin(prior) < 0:
+                         'not add to 1. sum(prior) = {}'.format(prior.sum().item()))
+    if prior.amin().item() < 0:
         raise ValueError('Input prior has negative values. Since the values '
                          'of prior are interpreted as probabilities, they '
                          'cannot be negative.')

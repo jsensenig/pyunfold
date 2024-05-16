@@ -6,7 +6,7 @@ import pandas as pd
 from .mix import Mixer
 from .teststat import get_ts
 from .priors import setup_prior
-from .utils import cast_to_array
+from .utils import cast_to_array, cast_to_tensor, cast_to_sparse_tensor
 from .callbacks import setup_callbacks_regularizer
 
 
@@ -116,6 +116,7 @@ def iterative_unfold(data=None, data_err=None, response=None,
      'unfolding_matrix': array([[0.8471473 , 0.1528527 ],
                                 [0.06404093, 0.93595907]])}
     """
+    print("BETTER PYUNFOLD!!")
     # Validate user input
     inputs = {'data': data,
               'data_err': data_err,
@@ -130,10 +131,10 @@ def iterative_unfold(data=None, data_err=None, response=None,
         elif np.amin(inputs[name]) < 0:
             raise ValueError('The items in {} must be non-negative.'.format(name))
 
-    data, data_err = cast_to_array(data, data_err)
-    response, response_err = cast_to_array(response, response_err)
-    efficiencies, efficiencies_err = cast_to_array(efficiencies,
-                                                   efficiencies_err)
+    data, data_err = cast_to_tensor(data, data_err)
+    response, response_err = cast_to_sparse_tensor(response, response_err)
+    efficiencies, efficiencies_err = cast_to_tensor(efficiencies,
+                                                    efficiencies_err)
 
     num_causes = len(efficiencies)
 
@@ -141,7 +142,7 @@ def iterative_unfold(data=None, data_err=None, response=None,
     prior = setup_prior(prior=prior, num_causes=num_causes)
 
     # Define first prior counts distribution
-    n_c = np.sum(data) * prior
+    n_c = data.sum().item() * prior
 
     # Setup Mixer
     mixer = Mixer(data=data,
@@ -200,7 +201,7 @@ def _unfold(prior=None, mixer=None, ts_func=None, max_iter=100,
     callbacks, regularizer = setup_callbacks_regularizer(callbacks)
     callbacks.on_unfolding_begin()
 
-    current_n_c = prior.copy()
+    current_n_c = prior.clone()
     iteration = 0
     unfolding_iters = []
     while not ts_func.pass_tol() and iteration < max_iter:
@@ -217,7 +218,7 @@ def _unfold(prior=None, mixer=None, ts_func=None, max_iter=100,
 
         if regularizer:
             # Will want the nonregularized distribution for the final iteration
-            unfolded_nonregularized = status['unfolded'].copy()
+            unfolded_nonregularized = status['unfolded'].clone()
             regularizer.on_iteration_end(iteration=iteration, status=status)
 
         ts_iter = ts_func.calc(status['unfolded'], current_n_c)
@@ -228,7 +229,7 @@ def _unfold(prior=None, mixer=None, ts_func=None, max_iter=100,
         unfolding_iters.append(status)
 
         # Updated current distribution for next iteration of unfolding
-        current_n_c = status['unfolded'].copy()
+        current_n_c = status['unfolded'].clone()
 
     # Convert unfolding_iters list of dictionaries to a pandas DataFrame
     unfolding_iters = pd.DataFrame.from_records(unfolding_iters)

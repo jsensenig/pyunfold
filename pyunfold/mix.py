@@ -1,6 +1,8 @@
 
 from __future__ import division, print_function
 import numpy as np
+from scipy.sparse import coo_matrix, diags
+import torch
 
 from .utils import safe_inverse
 
@@ -12,10 +14,10 @@ class Mixer(object):
                  efficiencies_err=None, response=None, response_err=None,
                  cov_type='multinomial'):
         # Input validation
-        if len(data) != response.shape[0]:
+        if data.shape[0] != response.shape[0]:
             err_msg = ('Inconsistent number of effect bins. Observed data '
                        'has {} effect bins, while response matrix has {} '
-                       'effect bins.'.format(len(data), response.shape[0]))
+                       'effect bins.'.format(data.shape[0], response.shape[0]))
             raise ValueError(err_msg)
 
         if response.ndim != 2:
@@ -34,7 +36,7 @@ class Mixer(object):
         self.ebins = dims[0]
         self.cEff_inv = safe_inverse(self.cEff)
         # Mixing Matrix
-        self.Mij = np.zeros(dims)
+        self.Mij = torch.zeros(dims, dtype=torch.double).to_sparse()
 
         self.cov = CovarianceMatrix(data=data,
                                     data_err=data_err,
@@ -54,14 +56,14 @@ class Mixer(object):
         """Statistical Errors
         """
         cvm = self.cov.getVc0()
-        err = np.sqrt(cvm.diagonal())
+        err = torch.sqrt(cvm.to_dense().diagonal()).to_sparse() #np.sqrt(cvm.diagonal())
         return err
 
     def get_MC_err(self):
         """MC (Systematic) Errors
         """
         cvm = self.cov.getVc1()
-        err = np.sqrt(cvm.diagonal())
+        err = torch.sqrt(cvm.to_dense().diagonal())
         return err
 
     def smear(self, n_c):
@@ -76,7 +78,7 @@ class Mixer(object):
             raise ValueError(err_msg)
 
         # Bayesian Normalization Term (denominator)
-        f_norm = np.dot(self.pec, n_c)
+        f_norm = self.pec @ n_c
         f_inv = safe_inverse(f_norm)
         n_c_eff = n_c * self.cEff_inv
 
@@ -84,7 +86,7 @@ class Mixer(object):
         Mij = self.pec * n_c_eff * f_inv.reshape(-1, 1)
 
         # Estimate cause distribution via Mij
-        n_c_update = np.dot(self.NEobs, Mij)
+        n_c_update = self.NEobs @ Mij
 
         # The status quo
         self.Mij = Mij
@@ -117,15 +119,15 @@ class CovarianceMatrix(object):
         self.NEobs = data
         self.NEobs_err = data_err
         # Total number of observed effects
-        self.nobs = np.sum(self.NEobs)
+        self.nobs = self.NEobs.sum().item()
 
         # Number of cause and effect eins
         dims = self.pec.shape
         self.cbins = dims[1]
         self.ebins = dims[0]
         # Adye propagating derivative
-        self.dcdn = np.zeros(dims)
-        self.dcdP = np.zeros((self.cbins, self.cbins * self.ebins))
+        self.dcdn = torch.zeros(dims, dtype=torch.double).to_sparse()
+        self.dcdP = torch.zeros((self.cbins, self.cbins * self.ebins), dtype=torch.double).to_sparse()
         # Counter for number of iterations
         self.counter = 0
 
@@ -134,7 +136,7 @@ class CovarianceMatrix(object):
         """
         # D'Agostini Form (and/or First Term of Adye)
         dcdP = self._initialize_dcdP(Mij, f_norm, n_c, n_c_prev)
-        dcdn = Mij.copy()
+        dcdn = Mij.clone()
         # Add Adye propagation corrections
         if self.counter > 0:
             dcdn, dcdP = self._adye_propagation_corrections(dcdP, Mij, n_c, n_c_prev)
@@ -151,24 +153,24 @@ class CovarianceMatrix(object):
 
         NE_F_R = self.NEobs * safe_inverse(f_norm)
 
-        dcdP = np.zeros((cbins, cbins * ebins))
+        dcdP = torch.empty((cbins, cbins * ebins)).double()
         # (ti, ec_j + tk) elements
         tk = np.arange(0, cbins)
         for ej in np.arange(0, ebins):
-            A = np.outer(-NE_F_R[ej] * Mij[ej, :], n_c_prev)
+            A = torch.outer(-NE_F_R[ej] * Mij.to_dense()[ej, :], n_c_prev)
             for ti in np.arange(0, cbins):
                 dcdP[ti, ej * cbins + tk] = A[ti, tk]
 
         # (ti, ec_j + ti) elements
         ti = np.arange(0, cbins)
-        A = (np.outer(n_c_prev, NE_F_R) - n_c[:, None]) * self.cEff_inv[:, None]
+        A = (torch.outer(n_c_prev, NE_F_R) - n_c[:, None]) * self.cEff_inv[:, None]
         for ej in np.arange(0, ebins):
             dcdP[ti, ej * cbins + ti] += A[ti, ej]
 
-        return dcdP
+        return dcdP.to_sparse()
 
     def _adye_propagation_corrections(self, dcdP, Mij, n_c, n_c_prev):
-        dcdn = Mij.copy()
+        dcdn = Mij.clone()
 
         # Get previous derivatives
         dcdn_prev = self.dcdn
@@ -184,15 +186,15 @@ class CovarianceMatrix(object):
         M1 = dcdn_prev * nc_r
         M2 = -Mij * e_r
         M2 = M2.T * self.NEobs
-        M3 = np.dot(M2, dcdn_prev)
-        dcdn += np.dot(Mij, M3)
+        M3 = M2 @ dcdn_prev
+        dcdn += Mij @ M3
         dcdn += M1
 
         # Calculate extra dcdP terms (from unfolding doc)
         At = Mij.T * self.NEobs
         B = Mij * e_r
-        C = np.dot(At, B)
-        dcdP_Upd = np.dot(C, dcdP_prev)
+        C = At @ B
+        dcdP_Upd = C @ dcdP_prev
         dcdP += (dcdP_prev.T * nc_r).T - dcdP_Upd
 
         return dcdn, dcdP
@@ -200,7 +202,9 @@ class CovarianceMatrix(object):
     def getVcd(self):
         """Get Covariance Matrix of N(E), ie from Observed Effects
         """
-        Vcd = np.diag(self.NEobs_err**2)
+        # Vcd = torch.diag(self.NEobs_err * self.NEobs_err).to_sparse()
+        diagonal = self.NEobs_err * self.NEobs_err
+        Vcd = torch.sparse.spdiags(diagonal[:, None].T, torch.zeros(1).long(), (diagonal.shape[0], diagonal.shape[0]))
         return Vcd
 
     def getVc0(self):
@@ -211,7 +215,7 @@ class CovarianceMatrix(object):
         # Get NObs covariance
         Vcd = self.getVcd()
         # Set data covariance
-        Vc0 = dcdn.T.dot(Vcd).dot(dcdn)
+        Vc0 = dcdn.T @ Vcd @ dcdn #dcdn.T.dot(Vcd).dot(dcdn)
 
         return Vc0
 
@@ -226,8 +230,9 @@ class CovarianceMatrix(object):
             CovPP = poisson_covariance(ebins, cbins, self.pec_err)
         # Multinomial covariance matrix
         elif self.pec_cov_type == 'multinomial':
-            nc_inv = safe_inverse(self.NCmc)
-            CovPP = multinomial_covariance(ebins, cbins, nc_inv, self.pec)
+            raise NotImplementedError
+            # nc_inv = safe_inverse(self.NCmc)
+            # CovPP = multinomial_covariance(ebins, cbins, nc_inv, self.pec)
 
         return CovPP
 
@@ -239,7 +244,7 @@ class CovarianceMatrix(object):
         # Get derivative
         dcdP = self.dcdP
         # Set MC covariance
-        Vc1 = dcdP.dot(CovPP).dot(dcdP.T)
+        Vc1 = dcdP @ CovPP @ dcdP.T #dcdP.dot(CovPP).dot(dcdP.T)
         return Vc1
 
     def get_cov(self):
@@ -255,13 +260,10 @@ class CovarianceMatrix(object):
 
 def poisson_covariance(ebins, cbins, pec_err):
     # Poisson covariance matrix
-    CovPP = np.zeros((cbins * ebins, cbins * ebins))
-    for ej in np.arange(0, ebins):
-        ejc = ej * cbins
-        for ti in np.arange(0, cbins):
-            CovPP[ejc+ti, ejc+ti] = pec_err[ej, ti]**2
-
-    return CovPP
+    diagonal = pec_err.to_dense().ravel()
+    diagonal *= diagonal
+    #return torch.diag(pec_err.to_dense().ravel() * pec_err.to_dense().ravel()).to_sparse()
+    return torch.sparse.spdiags(diagonal[:, None].T, torch.zeros(1).long(), (diagonal.shape[0], diagonal.shape[0]))
 
 
 def multinomial_covariance(ebins, cbins, nc_inv, pec):

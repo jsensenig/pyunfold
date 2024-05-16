@@ -1,6 +1,7 @@
 
 import sys
 import numpy as np
+import torch
 from scipy.interpolate import UnivariateSpline
 
 
@@ -81,7 +82,7 @@ class Logger(Callback):
             statistic value (``'ts_iter'``) and the final test statistic stopping
             condition (``'ts_stopping'``).
         """
-        output = ('Iteration {}: ts = {:0.4f}, ts_stopping ='
+        output = ('Iteration {}: ts = {:0.4f}, :) ts_stopping ='
                   ' {}\n'.format(iteration,
                                  status['ts_iter'],
                                  status['ts_stopping']))
@@ -139,7 +140,7 @@ class SplineRegularizer(Callback, Regularizer):
         self.groups = np.asarray(groups) if groups is not None else None
 
     def on_iteration_end(self, iteration, status=None):
-        y = status['unfolded']
+        y = status['unfolded'].numpy()
         x = np.arange(len(y), dtype=float)
         if self.groups is None:
             spline = UnivariateSpline(x, y, k=self.degree, s=self.smooth)
@@ -161,7 +162,7 @@ class SplineRegularizer(Callback, Regularizer):
                 fitted_unfolded_group = spline_group(x_group)
                 fitted_unfolded[group_mask] = fitted_unfolded_group
 
-        status['unfolded'] = fitted_unfolded
+        status['unfolded'] = torch.tensor(fitted_unfolded, dtype=torch.double).to_sparse()
 
 
 def validate_callbacks(callbacks):

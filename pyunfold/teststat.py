@@ -51,7 +51,7 @@ class TestStat(object):
             NR2 = dist2[self.ts_bins[0]:self.ts_bins[1]]
             return NR1, NR2
         else:
-            return dist1.copy(), dist2.copy()
+            return dist1.clone(), dist2.clone()
 
     def pass_tol(self):
         """Function testing whether TS < tol
@@ -101,10 +101,10 @@ class Chi2(TestStat):
         stat : float
             Test statistic
         """
-        dist1, dist2 = self.get_array_range(dist1, dist2)
+        dist1, dist2 = self.get_array_range(dist1.to_dense(), dist2.to_dense())
         self.check_lengths(dist1, dist2)
-        n1 = np.sum(dist1)
-        n2 = np.sum(dist2)
+        n1 = dist1.sum().item() #np.sum(dist1)
+        n2 = dist2.sum().item()  #np.sum(dist2)
 
         h_sum = dist1 + dist2
         # Don't divide by 0...
@@ -112,7 +112,7 @@ class Chi2(TestStat):
         h_dif = n2 * dist1 - n1 * dist2
         h_quot = h_dif * h_dif / h_sum
 
-        stat = np.sum(h_quot)/(n1*n2)/self.dof
+        stat = (h_quot.sum().item()/(n1*n2)/self.dof)
         self.stat = stat
 
         return stat

@@ -1,6 +1,8 @@
 
 from __future__ import division, print_function
 import numpy as np
+from scipy.sparse import coo_array
+import torch
 
 
 def assert_same_shape(*arrays):
@@ -48,6 +50,22 @@ def cast_to_array(*arrays):
     return output
 
 
+def cast_to_sparse_array(*arrays):
+    if len(arrays) == 1:
+        output = coo_array(arrays[0])
+    else:
+        output = map(coo_array, arrays)
+    return output
+
+
+def cast_to_tensor(*arrays):
+    return [t.double() for t in map(torch.tensor, arrays)]
+
+
+def cast_to_sparse_tensor(*arrays):
+    return [t.double().to_sparse() for t in map(torch.tensor, arrays)]
+
+
 def none_to_empty_list(*args):
     """Replaces None inputs with an empty list
 
@@ -92,10 +110,8 @@ def safe_inverse(x):
     >>> safe_inverse(a)
     array([1.        , 0.5       , 0.33333333, 0.        , 0.25      ])
     """
-    x = np.asarray(x)
-    is_zero = x == 0
-    with np.errstate(divide='ignore'):
-        inv = 1 / x
-    inv[is_zero] = 0
+    not_zero = x != 0
+    inv = torch.zeros(x.shape, dtype=x.dtype)
+    inv[not_zero] = 1. / x[not_zero]
 
     return inv
